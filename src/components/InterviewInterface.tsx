@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Vapi from '@vapi-ai/web';
-import { Camera, Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Loader2 } from 'lucide-react';
+import { Camera, Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Loader2, CheckCircle2 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -17,6 +17,8 @@ export default function InterviewInterface() {
     const [isMuted, setIsMuted] = useState(false);
     const [isVideoOff, setIsVideoOff] = useState(false);
     const [interviewConfig, setInterviewConfig] = useState<any>(null);
+    const [feedbackData, setFeedbackData] = useState<any>(null);
+    const [isInterviewEnded, setIsInterviewEnded] = useState(false);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -47,12 +49,60 @@ export default function InterviewInterface() {
         const onCallStart = () => {
             setIsCalling(true);
             setIsLoading(false);
+            setIsInterviewEnded(false);
+            setFeedbackData(null);
         };
 
         const onCallEnd = () => {
             setIsCalling(false);
             if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
                 mediaRecorderRef.current.stop();
+            }
+        };
+
+        const onMessage = async (message: any) => {
+            console.log('Vapi Message:', message);
+
+            // Handle Tool Calls
+            if (message.type === 'tool-calls') {
+                const toolCall = message.toolCalls[0];
+                if (toolCall.function.name === 'submit_interview_summary') {
+                    try {
+                        // Safe parsing: some Vapi versions return an object already
+                        const args = typeof toolCall.function.arguments === 'string'
+                            ? JSON.parse(toolCall.function.arguments)
+                            : toolCall.function.arguments;
+
+                        console.log('Interview Summary Received:', args);
+                        setFeedbackData(args);
+                        setIsInterviewEnded(true);
+
+                        // 1. Send feedback back to the assistant to acknowledge (avoids restart/looping)
+                        vapi.current.send({
+                            type: 'tool-call-result',
+                            toolCallId: toolCall.id,
+                            result: 'Summary received, thank you.'
+                        });
+
+                        // 2. Save feedback to API
+                        await fetch('/api/feedback', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                candidateName: args.candidate_name,
+                                feedback: args
+                            }),
+                        });
+
+                        // 3. Stop the call after a short delay to allow audio/state sync
+                        setTimeout(() => {
+                            if (vapi.current) vapi.current.stop();
+                        }, 1000);
+
+                    } catch (err) {
+                        console.error('Failed to process tool call result:', err);
+                    }
+                }
             }
         };
 
@@ -78,16 +128,16 @@ export default function InterviewInterface() {
 
         v.on('call-start', onCallStart);
         v.on('call-end', onCallEnd);
+        v.on('message', onMessage);
         v.on('error', onError);
         v.on('daily-participant-updated', onParticipantUpdated);
 
         return () => {
             v.off('call-start', onCallStart);
             v.off('call-end', onCallEnd);
+            v.off('message', onMessage);
             v.off('error', onError);
             v.off('daily-participant-updated', onParticipantUpdated);
-            // Don't stop the call here unless explicitly needed, 
-            // but we should cleanup listeners
         };
     }, []);
 
@@ -188,6 +238,42 @@ export default function InterviewInterface() {
                             content: interviewConfig.instructions
                         }
                     ],
+                    tools: [
+                        {
+                            type: "function",
+                            function: {
+                                name: "submit_interview_summary",
+                                description: "Submit the final JSON summary of the interview. Call this only when the interview is complete.",
+                                parameters: {
+                                    type: "object",
+                                    properties: {
+                                        candidate_name: { type: "string" },
+                                        current_role: { type: "string" },
+                                        primary_domain: { type: "string" },
+                                        core_tech_stack: { type: "array", items: { type: "string" } },
+                                        notice_period: { type: "string" },
+                                        current_location: { type: "string" },
+                                        comfortable_relocating: { type: "boolean" },
+                                        current_ctc: { type: "string" },
+                                        expected_ctc: { type: "string" },
+                                        soft_skills_assessment: {
+                                            type: "object",
+                                            properties: {
+                                                honesty: { type: "string" },
+                                                integrity: { type: "string" },
+                                                commitment: { type: "string" },
+                                                confidence_level: { type: "string", enum: ["Low", "Medium", "High"] },
+                                                communication_skills: { type: "string", enum: ["Below Average", "Average", "Above Average", "Excellent"] }
+                                            }
+                                        },
+                                        overall_summary: { type: "string" },
+                                        hiring_recommendation: { type: "string", enum: ["Strong Hire", "Hire", "Neutral", "Do Not Hire"] }
+                                    },
+                                    required: ["candidate_name", "overall_summary", "hiring_recommendation"]
+                                }
+                            }
+                        }
+                    ]
                 },
                 voice: {
                     provider: "openai",
@@ -244,6 +330,59 @@ export default function InterviewInterface() {
             setIsVideoOff(!isVideoOff);
         }
     };
+
+    if (isInterviewEnded) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8 max-w-2xl mx-auto text-center">
+                <div className="space-y-4 animate-in fade-in zoom-in duration-1000">
+                    <div className="mx-auto w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center border border-green-500/30">
+                        <CheckCircle2 className="w-10 h-10 text-green-400" />
+                    </div>
+                    <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
+                        Interview Completed
+                    </h1>
+                    <p className="text-xl text-gray-400 leading-relaxed">
+                        Thank you for your time, {feedbackData?.candidate_name || 'Candidate'}. Your responses and the video session have been successfully recorded.
+                    </p>
+                </div>
+
+                <div className="w-full h-px bg-white/10" />
+
+                <div className="grid grid-cols-1 gap-4 w-full text-left animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
+                    <div className="p-6 glass-card space-y-2">
+                        <h3 className="font-semibold text-white">What Happens Next?</h3>
+                        <p className="text-sm text-gray-400">
+                            Our hiring team will review your profile and video screening session. If your profile matches our requirements, we will contact you via email to schedule a technical round.
+                        </p>
+                    </div>
+
+                    <div className="p-6 glass-card space-y-2">
+                        <h3 className="font-semibold text-white">Confirmation</h3>
+                        <div className="flex items-center space-x-2 text-xs text-gray-500">
+                            <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 uppercase tracking-tighter font-mono">
+                                ID: {Date.now().toString().slice(-8)}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 uppercase tracking-tighter">
+                                Status: Recorded
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="pt-4 flex flex-col items-center space-y-4">
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="px-8 py-3 rounded-xl bg-white text-black font-semibold hover:bg-gray-200 transition-all shadow-xl shadow-white/5"
+                    >
+                        Return to Dashboard
+                    </button>
+                    <p className="text-[10px] text-gray-600 italic">
+                        The internal assessment has been securely delivered to the recruiting manager.
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8">
@@ -358,7 +497,7 @@ export default function InterviewInterface() {
                 </div>
                 <div className="p-6 glass-card space-y-2">
                     <h3 className="font-semibold text-white">Auto-Storage</h3>
-                    <p className="text-sm text-gray-400">Recording saved to local filesystem immediately after end.</p>
+                    <p className="text-sm text-gray-400">Recording & Feedback saved to local filesystem immediately after end.</p>
                 </div>
             </div>
         </div>
