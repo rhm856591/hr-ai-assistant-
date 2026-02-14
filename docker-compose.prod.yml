@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  ai-recruiter:
+    # Use pre-built image from Docker Hub
+    image: rahamtullahsheikh/ai-recruiter:latest
+    container_name: ai-recruiter
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_VAPI_PUBLIC_KEY=${NEXT_PUBLIC_VAPI_PUBLIC_KEY}
+      - VAPI_API_KEY=${VAPI_API_KEY}
+    volumes:
+      # Named volumes for persistent storage
+      - recordings:/app/storage/recordings
+      - feedback:/app/storage/feedback
+      # Mount instruction.md for easy updates without rebuild
+      - ./instruction.md:/app/instruction.md:ro
+    restart: unless-stopped
+    networks:
+      - ai-recruiter-network
+    # Health check to ensure service is running
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  recordings:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./storage/recordings
+  feedback:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./storage/feedback
+
+networks:
+  ai-recruiter-network:
+    driver: bridge
