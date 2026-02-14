@@ -1,0 +1,11 @@
+{
+    "id": "marketing-manager-mumbai",
+    "roleName": "Digital Marketing Manager",
+    "companyName": "BrandBoost Media",
+    "targetLocation": "Mumbai",
+    "description": "Drive our brand growth through data-driven digital marketing campaigns across social, search, and email channels.",
+    "specificQuestions": [
+        "Tell me about a campaign where you had to significantly pivot your strategy based on mid-campaign performance data.",
+        "How do you measure the ROI of brand awareness campaigns versus direct conversion campaigns?"
+    ]
+}

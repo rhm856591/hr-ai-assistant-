@@ -5,6 +5,7 @@ import path from 'path';
 export async function POST(req: Request) {
     try {
         const body = await req.json();
+        console.log('Received feedback request:', body);
         const { candidateName, feedback } = body;
 
         if (!feedback) {
@@ -19,7 +20,9 @@ export async function POST(req: Request) {
             fs.mkdirSync(absolutePath, { recursive: true });
         }
 
-        const fileName = `feedback_${candidateName || 'unknown'}_${Date.now()}.json`;
+        // Sanitize candidate name for filename
+        const safeCandidateName = (candidateName || 'unknown').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const fileName = `feedback_${safeCandidateName}_${Date.now()}.json`;
         const filePath = path.join(absolutePath, fileName);
 
         fs.writeFileSync(filePath, JSON.stringify(feedback, null, 2));

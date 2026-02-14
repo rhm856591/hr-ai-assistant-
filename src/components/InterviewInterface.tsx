@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import Vapi from '@vapi-ai/web';
-import { Camera, Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Loader2, CheckCircle2 } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { Camera, Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -10,9 +11,14 @@ function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
 }
 
-export default function InterviewInterface() {
+function InterviewContent() {
+    const searchParams = useSearchParams();
+    const email = searchParams.get('email');
+    const jdId = searchParams.get('jdId');
+
     const [isCalling, setIsCalling] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+    const [verificationError, setVerificationError] = useState<string | null>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
     const [isMuted, setIsMuted] = useState(false);
     const [isVideoOff, setIsVideoOff] = useState(false);
@@ -37,11 +43,25 @@ export default function InterviewInterface() {
 
         const v = vapi.current;
 
-        // Fetch config and auto-setup media
-        fetch('/api/config')
-            .then(res => res.json())
-            .then(data => setInterviewConfig(data))
-            .catch(err => console.error('Failed to load config', err));
+        // Verify and Fetch config
+        if (!email || !jdId) {
+            setVerificationError('Invalid interview link. Missing credentials.');
+            setIsLoading(false);
+            return;
+        }
+
+        fetch(`/api/config?email=${encodeURIComponent(email)}&jdId=${encodeURIComponent(jdId)}`)
+            .then(async res => {
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Verification failed');
+                setInterviewConfig(data);
+                setIsLoading(false);
+            })
+            .catch(err => {
+                console.error('Verification failed', err);
+                setVerificationError(err.message);
+                setIsLoading(false);
+            });
 
         setupMedia();
 
@@ -58,6 +78,8 @@ export default function InterviewInterface() {
             if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
                 mediaRecorderRef.current.stop();
             }
+            // Transition to result screen ONLY after the call actually stops
+            setIsInterviewEnded(true);
         };
 
         const onMessage = async (message: any) => {
@@ -68,36 +90,37 @@ export default function InterviewInterface() {
                 const toolCall = message.toolCalls[0];
                 if (toolCall.function.name === 'submit_interview_summary') {
                     try {
-                        // Safe parsing: some Vapi versions return an object already
                         const args = typeof toolCall.function.arguments === 'string'
                             ? JSON.parse(toolCall.function.arguments)
                             : toolCall.function.arguments;
 
                         console.log('Interview Summary Received:', args);
                         setFeedbackData(args);
-                        setIsInterviewEnded(true);
 
-                        // 1. Send feedback back to the assistant to acknowledge (avoids restart/looping)
+                        // 1. Send feedback result back (System message to stop further talking)
                         vapi.current.send({
                             type: 'tool-call-result',
                             toolCallId: toolCall.id,
-                            result: 'Summary received, thank you.'
+                            result: 'JSON_SUBMITTED_SILENTLY. DO NOT SPEAK FURTHER. DISCONNECTING.'
                         });
 
                         // 2. Save feedback to API
+                        const feedbackBody = {
+                            candidateName: args.candidate_name || interviewConfig?.candidateName || 'Candidate',
+                            feedback: args
+                        };
+                        console.log('Saving feedback to API:', feedbackBody);
+
                         await fetch('/api/feedback', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                candidateName: args.candidate_name,
-                                feedback: args
-                            }),
+                            body: JSON.stringify(feedbackBody),
                         });
 
-                        // 3. Stop the call after a short delay to allow audio/state sync
+                        // 3. Wait 8 seconds to allow a complete audio buffer flush
                         setTimeout(() => {
                             if (vapi.current) vapi.current.stop();
-                        }, 1000);
+                        }, 8000);
 
                     } catch (err) {
                         console.error('Failed to process tool call result:', err);
@@ -223,7 +246,7 @@ export default function InterviewInterface() {
             console.log('Starting Vapi with Public Key:', process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY ? 'Present' : 'MISSING');
 
             await vapi.current.start({
-                name: "Sarah - HR Recruiter",
+                name: "HR Sarah Interview", // Changed name
                 transcriber: {
                     provider: "deepgram",
                     model: "nova-2",
@@ -279,7 +302,7 @@ export default function InterviewInterface() {
                     provider: "openai",
                     voiceId: "shimmer",
                 },
-                firstMessage: "Hi there! I'm Sarah from the HR team. Am I speaking with the candidate?",
+                firstMessage: `Hi! I'm Sarah. I'm excited to talk with you today. Let's begin the screening.`,
             } as any);
         } catch (err: any) {
             console.error('Failed to start interview. Payload rejection details:');
@@ -384,14 +407,34 @@ export default function InterviewInterface() {
         );
     }
 
+    if (verificationError) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-4 text-center">
+                <div className="p-4 rounded-full bg-red-500/10 border border-red-500/20">
+                    <AlertCircle className="w-12 h-12 text-red-500" />
+                </div>
+                <h2 className="text-2xl font-bold text-white">Access Denied</h2>
+                <p className="text-gray-400 max-w-md">{verificationError}</p>
+                <button
+                    onClick={() => window.location.reload()}
+                    className="mt-4 px-6 py-2 rounded-xl bg-white/5 text-white hover:bg-white/10 transition-colors border border-white/10"
+                >
+                    Retry Verification
+                </button>
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8">
             <div className="text-center space-y-2">
-                <h1 className="text-4xl font-bold tracking-tight text-white sm:text-6xl">
-                    The Autonomous Recruiter
+                <h1 className="text-4xl font-bold tracking-tight text-white sm:text-6xl animate-in fade-in duration-1000">
+                    {interviewConfig ? `Welcome, ${interviewConfig.candidateName}` : 'Preparing Interview...'}
                 </h1>
                 <p className="text-xl text-gray-400">
-                    Sarah is ready to conduct your preliminary screening.
+                    {interviewConfig
+                        ? `Sarah is ready to discuss the ${interviewConfig.roleName} role with you.`
+                        : 'Please wait while we verify your invitation...'}
                 </p>
             </div>
 
@@ -404,7 +447,7 @@ export default function InterviewInterface() {
                         <button
                             onClick={setupMedia}
                             disabled={isLoading}
-                            className="px-6 py-3 rounded-xl bg-white text-black font-semibold hover:bg-gray-200 transition-colors flex items-center space-x-2"
+                            className="px-6 py-3 rounded-xl bg-white text-black font-semibold hover:bg-gray-200 transition-colors flex items-center space-x-2 shadow-xl shadow-white/10"
                         >
                             {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>Enable Camera & Mic</span>}
                         </button>
@@ -489,11 +532,11 @@ export default function InterviewInterface() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
                 <div className="p-6 glass-card space-y-2">
                     <h3 className="font-semibold text-white">Persona</h3>
-                    <p className="text-sm text-gray-400">Sarah, Professional HR Associate. Polite and efficient.</p>
+                    <p className="text-sm text-gray-400">Sarah, {interviewConfig?.companyName || 'HR'} Associate. Polite and efficient.</p>
                 </div>
                 <div className="p-6 glass-card space-y-2">
-                    <h3 className="font-semibold text-white">Dynamic Script</h3>
-                    <p className="text-sm text-gray-400">Loaded from instruction.md. No hardcoded questions.</p>
+                    <h3 className="font-semibold text-white">JD Focused</h3>
+                    <p className="text-sm text-gray-400">Questions tailored to {interviewConfig?.roleName || 'the role'}.</p>
                 </div>
                 <div className="p-6 glass-card space-y-2">
                     <h3 className="font-semibold text-white">Auto-Storage</h3>
@@ -501,5 +544,18 @@ export default function InterviewInterface() {
                 </div>
             </div>
         </div>
+    );
+}
+
+export default function InterviewInterface() {
+    return (
+        <Suspense fallback={
+            <div className="flex flex-col items-center justify-center min-h-screen text-white space-y-4">
+                <Loader2 className="w-12 h-12 animate-spin text-indigo-500" />
+                <p className="text-gray-400 animate-pulse">Loading Interview Workspace...</p>
+            </div>
+        }>
+            <InterviewContent />
+        </Suspense>
     );
 }

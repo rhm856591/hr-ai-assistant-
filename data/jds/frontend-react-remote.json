@@ -1,0 +1,11 @@
+{
+    "id": "frontend-react-remote",
+    "roleName": "Senior Frontend Developer (React)",
+    "companyName": "CloudPixel Studios",
+    "targetLocation": "Remote",
+    "description": "Looking for a React specialist who loves building beautiful, responsive, and high-performance user interfaces.",
+    "specificQuestions": [
+        "How do you approach component composition to ensure maximum reusability in a large-scale React app?",
+        "What strategies do you use for optimizing Core Web Vitals in a Next.js application?"
+    ]
+}
