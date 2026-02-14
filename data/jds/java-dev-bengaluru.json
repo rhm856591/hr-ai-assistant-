@@ -1,0 +1,11 @@
+{
+    "id": "java-dev-bengaluru",
+    "roleName": "Backend Java Developer",
+    "companyName": "InnoSoft Systems",
+    "targetLocation": "Bengaluru",
+    "description": "We are seeking a Backend Engineer with strong expertise in Java, Spring Boot, and Microservices architecture.",
+    "specificQuestions": [
+        "Can you explain how you handle transaction management in a distributed microservices environment?",
+        "What is your experience with JVM performance tuning and identifying memory leaks?"
+    ]
+}

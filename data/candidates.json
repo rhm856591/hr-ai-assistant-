@@ -1,0 +1,17 @@
+[
+    {
+        "email": "candidate@example.com",
+        "name": "John Doe",
+        "status": "invited"
+    },
+    {
+        "email": "rahul@example.com",
+        "name": "Rahul Sharma",
+        "status": "invite"
+    },
+    {
+        "email": "priya@gmail.com",
+        "name": "Priya Singh",
+        "status": "invite"
+    }
+]

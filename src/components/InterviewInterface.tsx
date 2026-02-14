@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import Vapi from '@vapi-ai/web';
-import { Camera, Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Loader2 } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { Camera, Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -10,13 +11,20 @@ function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
 }
 
-export default function InterviewInterface() {
+function InterviewContent() {
+    const searchParams = useSearchParams();
+    const email = searchParams.get('email');
+    const jdId = searchParams.get('jdId');
+
     const [isCalling, setIsCalling] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+    const [verificationError, setVerificationError] = useState<string | null>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
     const [isMuted, setIsMuted] = useState(false);
     const [isVideoOff, setIsVideoOff] = useState(false);
     const [interviewConfig, setInterviewConfig] = useState<any>(null);
+    const [feedbackData, setFeedbackData] = useState<any>(null);
+    const [isInterviewEnded, setIsInterviewEnded] = useState(false);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -35,11 +43,25 @@ export default function InterviewInterface() {
 
         const v = vapi.current;
 
-        // Fetch config and auto-setup media
-        fetch('/api/config')
-            .then(res => res.json())
-            .then(data => setInterviewConfig(data))
-            .catch(err => console.error('Failed to load config', err));
+        // Verify and Fetch config
+        if (!email || !jdId) {
+            setVerificationError('Invalid interview link. Missing credentials.');
+            setIsLoading(false);
+            return;
+        }
+
+        fetch(`/api/config?email=${encodeURIComponent(email)}&jdId=${encodeURIComponent(jdId)}`)
+            .then(async res => {
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Verification failed');
+                setInterviewConfig(data);
+                setIsLoading(false);
+            })
+            .catch(err => {
+                console.error('Verification failed', err);
+                setVerificationError(err.message);
+                setIsLoading(false);
+            });
 
         setupMedia();
 
@@ -47,12 +69,63 @@ export default function InterviewInterface() {
         const onCallStart = () => {
             setIsCalling(true);
             setIsLoading(false);
+            setIsInterviewEnded(false);
+            setFeedbackData(null);
         };
 
         const onCallEnd = () => {
             setIsCalling(false);
             if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
                 mediaRecorderRef.current.stop();
+            }
+            // Transition to result screen ONLY after the call actually stops
+            setIsInterviewEnded(true);
+        };
+
+        const onMessage = async (message: any) => {
+            console.log('Vapi Message:', message);
+
+            // Handle Tool Calls
+            if (message.type === 'tool-calls') {
+                const toolCall = message.toolCalls[0];
+                if (toolCall.function.name === 'submit_interview_summary') {
+                    try {
+                        const args = typeof toolCall.function.arguments === 'string'
+                            ? JSON.parse(toolCall.function.arguments)
+                            : toolCall.function.arguments;
+
+                        console.log('Interview Summary Received:', args);
+                        setFeedbackData(args);
+
+                        // 1. Send feedback result back (System message to stop further talking)
+                        vapi.current.send({
+                            type: 'tool-call-result',
+                            toolCallId: toolCall.id,
+                            result: 'JSON_SUBMITTED_SILENTLY. DO NOT SPEAK FURTHER. DISCONNECTING.'
+                        });
+
+                        // 2. Save feedback to API
+                        const feedbackBody = {
+                            candidateName: args.candidate_name || interviewConfig?.candidateName || 'Candidate',
+                            feedback: args
+                        };
+                        console.log('Saving feedback to API:', feedbackBody);
+
+                        await fetch('/api/feedback', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(feedbackBody),
+                        });
+
+                        // 3. Wait 8 seconds to allow a complete audio buffer flush
+                        setTimeout(() => {
+                            if (vapi.current) vapi.current.stop();
+                        }, 8000);
+
+                    } catch (err) {
+                        console.error('Failed to process tool call result:', err);
+                    }
+                }
             }
         };
 
@@ -78,16 +151,16 @@ export default function InterviewInterface() {
 
         v.on('call-start', onCallStart);
         v.on('call-end', onCallEnd);
+        v.on('message', onMessage);
         v.on('error', onError);
         v.on('daily-participant-updated', onParticipantUpdated);
 
         return () => {
             v.off('call-start', onCallStart);
             v.off('call-end', onCallEnd);
+            v.off('message', onMessage);
             v.off('error', onError);
             v.off('daily-participant-updated', onParticipantUpdated);
-            // Don't stop the call here unless explicitly needed, 
-            // but we should cleanup listeners
         };
     }, []);
 
@@ -173,7 +246,7 @@ export default function InterviewInterface() {
             console.log('Starting Vapi with Public Key:', process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY ? 'Present' : 'MISSING');
 
             await vapi.current.start({
-                name: "Sarah - HR Recruiter",
+                name: "HR Sarah Interview", // Changed name
                 transcriber: {
                     provider: "deepgram",
                     model: "nova-2",
@@ -188,12 +261,48 @@ export default function InterviewInterface() {
                             content: interviewConfig.instructions
                         }
                     ],
+                    tools: [
+                        {
+                            type: "function",
+                            function: {
+                                name: "submit_interview_summary",
+                                description: "Submit the final JSON summary of the interview. Call this only when the interview is complete.",
+                                parameters: {
+                                    type: "object",
+                                    properties: {
+                                        candidate_name: { type: "string" },
+                                        current_role: { type: "string" },
+                                        primary_domain: { type: "string" },
+                                        core_tech_stack: { type: "array", items: { type: "string" } },
+                                        notice_period: { type: "string" },
+                                        current_location: { type: "string" },
+                                        comfortable_relocating: { type: "boolean" },
+                                        current_ctc: { type: "string" },
+                                        expected_ctc: { type: "string" },
+                                        soft_skills_assessment: {
+                                            type: "object",
+                                            properties: {
+                                                honesty: { type: "string" },
+                                                integrity: { type: "string" },
+                                                commitment: { type: "string" },
+                                                confidence_level: { type: "string", enum: ["Low", "Medium", "High"] },
+                                                communication_skills: { type: "string", enum: ["Below Average", "Average", "Above Average", "Excellent"] }
+                                            }
+                                        },
+                                        overall_summary: { type: "string" },
+                                        hiring_recommendation: { type: "string", enum: ["Strong Hire", "Hire", "Neutral", "Do Not Hire"] }
+                                    },
+                                    required: ["candidate_name", "overall_summary", "hiring_recommendation"]
+                                }
+                            }
+                        }
+                    ]
                 },
                 voice: {
                     provider: "openai",
                     voiceId: "shimmer",
                 },
-                firstMessage: "Hi there! I'm Sarah from the HR team. Am I speaking with the candidate?",
+                firstMessage: `Hi! I'm Sarah. I'm excited to talk with you today. Let's begin the screening.`,
             } as any);
         } catch (err: any) {
             console.error('Failed to start interview. Payload rejection details:');
@@ -245,14 +354,87 @@ export default function InterviewInterface() {
         }
     };
 
+    if (isInterviewEnded) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8 max-w-2xl mx-auto text-center">
+                <div className="space-y-4 animate-in fade-in zoom-in duration-1000">
+                    <div className="mx-auto w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center border border-green-500/30">
+                        <CheckCircle2 className="w-10 h-10 text-green-400" />
+                    </div>
+                    <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
+                        Interview Completed
+                    </h1>
+                    <p className="text-xl text-gray-400 leading-relaxed">
+                        Thank you for your time, {feedbackData?.candidate_name || 'Candidate'}. Your responses and the video session have been successfully recorded.
+                    </p>
+                </div>
+
+                <div className="w-full h-px bg-white/10" />
+
+                <div className="grid grid-cols-1 gap-4 w-full text-left animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
+                    <div className="p-6 glass-card space-y-2">
+                        <h3 className="font-semibold text-white">What Happens Next?</h3>
+                        <p className="text-sm text-gray-400">
+                            Our hiring team will review your profile and video screening session. If your profile matches our requirements, we will contact you via email to schedule a technical round.
+                        </p>
+                    </div>
+
+                    <div className="p-6 glass-card space-y-2">
+                        <h3 className="font-semibold text-white">Confirmation</h3>
+                        <div className="flex items-center space-x-2 text-xs text-gray-500">
+                            <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 uppercase tracking-tighter font-mono">
+                                ID: {Date.now().toString().slice(-8)}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 uppercase tracking-tighter">
+                                Status: Recorded
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="pt-4 flex flex-col items-center space-y-4">
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="px-8 py-3 rounded-xl bg-white text-black font-semibold hover:bg-gray-200 transition-all shadow-xl shadow-white/5"
+                    >
+                        Return to Dashboard
+                    </button>
+                    <p className="text-[10px] text-gray-600 italic">
+                        The internal assessment has been securely delivered to the recruiting manager.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    if (verificationError) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-4 text-center">
+                <div className="p-4 rounded-full bg-red-500/10 border border-red-500/20">
+                    <AlertCircle className="w-12 h-12 text-red-500" />
+                </div>
+                <h2 className="text-2xl font-bold text-white">Access Denied</h2>
+                <p className="text-gray-400 max-w-md">{verificationError}</p>
+                <button
+                    onClick={() => window.location.reload()}
+                    className="mt-4 px-6 py-2 rounded-xl bg-white/5 text-white hover:bg-white/10 transition-colors border border-white/10"
+                >
+                    Retry Verification
+                </button>
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8">
             <div className="text-center space-y-2">
-                <h1 className="text-4xl font-bold tracking-tight text-white sm:text-6xl">
-                    The Autonomous Recruiter
+                <h1 className="text-4xl font-bold tracking-tight text-white sm:text-6xl animate-in fade-in duration-1000">
+                    {interviewConfig ? `Welcome, ${interviewConfig.candidateName}` : 'Preparing Interview...'}
                 </h1>
                 <p className="text-xl text-gray-400">
-                    Sarah is ready to conduct your preliminary screening.
+                    {interviewConfig
+                        ? `Sarah is ready to discuss the ${interviewConfig.roleName} role with you.`
+                        : 'Please wait while we verify your invitation...'}
                 </p>
             </div>
 
@@ -265,7 +447,7 @@ export default function InterviewInterface() {
                         <button
                             onClick={setupMedia}
                             disabled={isLoading}
-                            className="px-6 py-3 rounded-xl bg-white text-black font-semibold hover:bg-gray-200 transition-colors flex items-center space-x-2"
+                            className="px-6 py-3 rounded-xl bg-white text-black font-semibold hover:bg-gray-200 transition-colors flex items-center space-x-2 shadow-xl shadow-white/10"
                         >
                             {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>Enable Camera & Mic</span>}
                         </button>
@@ -350,17 +532,30 @@ export default function InterviewInterface() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
                 <div className="p-6 glass-card space-y-2">
                     <h3 className="font-semibold text-white">Persona</h3>
-                    <p className="text-sm text-gray-400">Sarah, Professional HR Associate. Polite and efficient.</p>
+                    <p className="text-sm text-gray-400">Sarah, {interviewConfig?.companyName || 'HR'} Associate. Polite and efficient.</p>
                 </div>
                 <div className="p-6 glass-card space-y-2">
-                    <h3 className="font-semibold text-white">Dynamic Script</h3>
-                    <p className="text-sm text-gray-400">Loaded from instruction.md. No hardcoded questions.</p>
+                    <h3 className="font-semibold text-white">JD Focused</h3>
+                    <p className="text-sm text-gray-400">Questions tailored to {interviewConfig?.roleName || 'the role'}.</p>
                 </div>
                 <div className="p-6 glass-card space-y-2">
                     <h3 className="font-semibold text-white">Auto-Storage</h3>
-                    <p className="text-sm text-gray-400">Recording saved to local filesystem immediately after end.</p>
+                    <p className="text-sm text-gray-400">Recording & Feedback saved to local filesystem immediately after end.</p>
                 </div>
             </div>
         </div>
+    );
+}
+
+export default function InterviewInterface() {
+    return (
+        <Suspense fallback={
+            <div className="flex flex-col items-center justify-center min-h-screen text-white space-y-4">
+                <Loader2 className="w-12 h-12 animate-spin text-indigo-500" />
+                <p className="text-gray-400 animate-pulse">Loading Interview Workspace...</p>
+            </div>
+        }>
+            <InterviewContent />
+        </Suspense>
     );
 }

@@ -1,0 +1,11 @@
+{
+    "id": "fullstack-noida-001",
+    "roleName": "Senior Full Stack Engineer",
+    "companyName": "TechFlow Solutions",
+    "targetLocation": "Noida",
+    "description": "We are looking for a developer experienced in Next.js, TypeScript, and Node.js to build scalesble AI platforms.",
+    "specificQuestions": [
+        "Tell me about a complex state management challenge you solved in a Next.js application.",
+        "How do you ensure data integrity when working with distributed databases?"
+    ]
+}
