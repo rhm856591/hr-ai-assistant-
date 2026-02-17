@@ -54,6 +54,7 @@ function InterviewContent() {
             .then(async res => {
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Verification failed');
+                console.log('Interview Config Loaded:', data);
                 setInterviewConfig(data);
                 setIsLoading(false);
             })
@@ -125,16 +126,28 @@ function InterviewContent() {
                     } catch (err) {
                         console.error('Failed to process tool call result:', err);
                     }
+                } else if (toolCall.function.name === 'end_call') {
+                    console.log('End Call Tool Triggered');
+                    // Respond to tool call so agent doesn't hang
+                    vapi.current.send({
+                        type: 'tool-call-result',
+                        toolCallId: toolCall.id,
+                        result: 'DISCONNECTING'
+                    });
+                    // Hang up after a slight delay to allow the last spoken words to finish
+                    setTimeout(() => {
+                        if (vapi.current) vapi.current.stop();
+                    }, 2000);
                 }
             }
         };
 
         const onError = (error: any) => {
-            console.error('Vapi Error:', error);
+            console.error('Vapi Error Details:', JSON.stringify(error, null, 2));
             setIsLoading(false);
             setIsCalling(false);
-            const message = error?.message || (typeof error === 'string' ? error : 'Internal Vapi Error');
-            alert(`Interview Error: ${message}`);
+            const message = error?.message || (typeof error === 'string' ? error : JSON.stringify(error));
+            alert(`Interview Error: ${message === '{}' ? 'Check if ElevenLabs key is integrated in Vapi dashboard' : message}`);
         };
 
         const onParticipantUpdated = (p: any) => {
@@ -162,7 +175,13 @@ function InterviewContent() {
             v.off('error', onError);
             v.off('daily-participant-updated', onParticipantUpdated);
         };
-    }, []);
+    }, []); // Only run once to initialize Vapi and fetch config once
+
+    // Keep interviewConfig in a ref so event handlers can access current state without re-running useEffect
+    const configRef = useRef<any>(null);
+    useEffect(() => {
+        configRef.current = interviewConfig;
+    }, [interviewConfig]);
 
     const setupMedia = async () => {
         try {
@@ -242,25 +261,28 @@ function InterviewContent() {
 
             recorder.start();
 
-            // Start Vapi Call
-            console.log('Starting Vapi with Public Key:', process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY ? 'Present' : 'MISSING');
+            // Ensure any existing call is stopped
+            if (vapi.current) vapi.current.stop();
 
-            await vapi.current.start({
-                name: "HR Sarah Interview", // Changed name
+            // Start Vapi Call
+            const startPayload = {
+                name: "HR Priya Interview",
                 transcriber: {
                     provider: "deepgram",
                     model: "nova-2",
                     language: "en-US",
                 },
                 model: {
-                    provider: "openai" as any,
-                    model: "gpt-4o" as any,
+                    provider: "openai",
+                    model: "gpt-4o",
                     messages: [
                         {
-                            role: "system" as any,
+                            role: "system",
                             content: interviewConfig.instructions
                         }
                     ],
+                    temperature: 0.7,
+                    maxTokens: 500,
                     tools: [
                         {
                             type: "function",
@@ -295,15 +317,33 @@ function InterviewContent() {
                                     required: ["candidate_name", "overall_summary", "hiring_recommendation"]
                                 }
                             }
+                        },
+                        {
+                            type: "function",
+                            function: {
+                                name: "end_call",
+                                description: "End the call gracefully if the candidate is not available or does not want to proceed with the interview."
+                            }
                         }
                     ]
                 },
                 voice: {
+                    // provider: "11labs",
+                    // voiceId: "amiAXapsDOAiHJqbsAZj", // Priya (Indian English)
                     provider: "openai",
                     voiceId: "shimmer",
+                    // stability: 0.35, // Low stability = more emotional variance
+                    // similarityBoost: 0.85,
+                    // speed: 0.9,
+                    // fillerInjectionEnabled: true,
                 },
-                firstMessage: `Hi! I'm Sarah. I'm excited to talk with you today. Let's begin the screening.`,
-            } as any);
+                firstMessage: interviewConfig.firstMessage || `Hi! I'm Priya. I'm excited to talk with you today. Let's begin the screening.`,
+            };
+
+            console.log('Starting Vapi Session with payload:', JSON.stringify(startPayload, null, 2));
+
+            await vapi.current.start(startPayload as any);
+            console.log('Vapi session started successfully');
         } catch (err: any) {
             console.error('Failed to start interview. Payload rejection details:');
             console.error(err);

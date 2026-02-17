@@ -1,0 +1,14 @@
+{
+    "id": "l2-support-engineer",
+    "roleName": "L2 Support Engineer",
+    "companyName": "NexGen Solutions",
+    "targetLocation": "Remote / Hybrid",
+    "description": "We are seeking a proactive L2 Support Engineer to investigate and resolve complex technical issues. You will be responsible for deep-dive debugging of production incidents, collaborating with development teams, and ensuring high system availability. Strong expertise in Java, Spring Boot, MongoDB, and SQL is essential. Experience with Docker, Redis, and monitoring tools like ELK or Splunk is a major plus.",
+    "specificQuestions": [
+        "How do you typically go about debugging a 'NullPointerException' in a Spring Boot service that only occurs intermittently in production?",
+        "Explain your approach to troubleshooting a slow-performing SQL query compared to a slow MongoDB aggregation.",
+        "Describe a situation where you had to debug a data inconsistency issue between a relational database and a NoSQL store.",
+        "What tools and techniques (e.g., ELK stack, Grafana) do you use to monitor application health and identify bottlenecks?",
+        "How would you troubleshoot a connectivity issue for a containerized Java application running in Docker?"
+    ]
+}

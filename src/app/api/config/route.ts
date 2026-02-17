@@ -43,9 +43,12 @@ export async function GET(req: Request) {
             .replaceAll('{targetLocation}', jd.targetLocation)
             .replaceAll('{jdSpecificQuestion}', specificQuestion);
 
+        const firstMessage = `Hi ${candidate.name}! This is Priya from the HR team at ${jd.companyName}. I'm glad we could connect. I'm reaching out regarding your application for the ${jd.roleName} position. Is this a good time for a quick 5-minute chat?`;
+
         return NextResponse.json({
             ...config,
             instructions: processedInstructions,
+            firstMessage: firstMessage,
             candidateName: candidate.name,
             roleName: jd.roleName,
             companyName: jd.companyName
