@@ -25,6 +25,8 @@ function InterviewContent() {
     const [interviewConfig, setInterviewConfig] = useState<any>(null);
     const [feedbackData, setFeedbackData] = useState<any>(null);
     const [isInterviewEnded, setIsInterviewEnded] = useState(false);
+    const [isRescheduled, setIsRescheduled] = useState(false);
+    const [rescheduleData, setRescheduleData] = useState<{ preferred_time: string; notes?: string } | null>(null);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -125,6 +127,45 @@ function InterviewContent() {
 
                     } catch (err) {
                         console.error('Failed to process tool call result:', err);
+                    }
+                } else if (toolCall.function.name === 'reschedule_call') {
+                    try {
+                        const args = typeof toolCall.function.arguments === 'string'
+                            ? JSON.parse(toolCall.function.arguments)
+                            : toolCall.function.arguments;
+
+                        console.log('Reschedule Call Tool Triggered:', args);
+                        setRescheduleData(args);
+
+                        // 1. Acknowledge the tool call so agent doesn't hang
+                        vapi.current.send({
+                            type: 'tool-call-result',
+                            toolCallId: toolCall.id,
+                            result: 'RESCHEDULE_SAVED. Callback time noted. Disconnecting.'
+                        });
+
+                        // 2. Save to API
+                        const config = configRef.current;
+                        await fetch('/api/reschedule', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                candidateName: config?.candidateName || 'Candidate',
+                                email: email,
+                                jdId: jdId,
+                                preferredTime: args.preferred_time || args.preferredTime || 'Not specified',
+                                notes: args.notes || null,
+                            }),
+                        });
+
+                        // 3. Mark as rescheduled and stop call
+                        setIsRescheduled(true);
+                        setTimeout(() => {
+                            if (vapi.current) vapi.current.stop();
+                        }, 3000);
+
+                    } catch (err) {
+                        console.error('Failed to process reschedule_call:', err);
                     }
                 } else if (toolCall.function.name === 'end_call') {
                     console.log('End Call Tool Triggered');
@@ -321,8 +362,33 @@ function InterviewContent() {
                         {
                             type: "function",
                             function: {
+                                name: "reschedule_call",
+                                description: "Save the candidate's preferred callback time and reschedule the interview. Call this when the candidate says it's not a good time and provides a preferred time to be called back.",
+                                parameters: {
+                                    type: "object",
+                                    properties: {
+                                        preferred_time: {
+                                            type: "string",
+                                            description: "The candidate's preferred callback time or date (e.g., 'tomorrow at 3pm', 'Monday morning', 'after 6pm today')"
+                                        },
+                                        notes: {
+                                            type: "string",
+                                            description: "Any additional notes about the reschedule (optional)"
+                                        }
+                                    },
+                                    required: ["preferred_time"]
+                                }
+                            }
+                        },
+                        {
+                            type: "function",
+                            function: {
                                 name: "end_call",
-                                description: "End the call gracefully if the candidate is not available or does not want to proceed with the interview."
+                                description: "End the call gracefully after rescheduling or if the candidate does not want to proceed.",
+                                parameters: {
+                                    type: "object",
+                                    properties: {}
+                                }
                             }
                         }
                     ]
@@ -393,6 +459,68 @@ function InterviewContent() {
             setIsVideoOff(!isVideoOff);
         }
     };
+
+    if (isRescheduled) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8 max-w-2xl mx-auto text-center">
+                <div className="space-y-4 animate-in fade-in zoom-in duration-1000">
+                    <div className="mx-auto w-20 h-20 rounded-full bg-blue-500/20 flex items-center justify-center border border-blue-500/30">
+                        <svg className="w-10 h-10 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
+                        Call Rescheduled!
+                    </h1>
+                    <p className="text-xl text-gray-400 leading-relaxed">
+                        No worries, {interviewConfig?.candidateName || 'there'}! We've noted your preferred callback time and will reach out to you shortly.
+                    </p>
+                </div>
+
+                <div className="w-full h-px bg-white/10" />
+
+                <div className="grid grid-cols-1 gap-4 w-full text-left animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
+                    {rescheduleData?.preferred_time && (
+                        <div className="p-6 glass-card space-y-2">
+                            <h3 className="font-semibold text-white flex items-center gap-2">
+                                <span className="text-blue-400">📅</span> Preferred Callback Time
+                            </h3>
+                            <p className="text-lg text-blue-300 font-medium">{rescheduleData.preferred_time}</p>
+                        </div>
+                    )}
+                    <div className="p-6 glass-card space-y-2">
+                        <h3 className="font-semibold text-white">What Happens Next?</h3>
+                        <p className="text-sm text-gray-400">
+                            Our HR team has been notified of your preferred callback time. A recruiter will reach out to you at the specified time to continue the screening process.
+                        </p>
+                    </div>
+                    <div className="p-6 glass-card space-y-2">
+                        <h3 className="font-semibold text-white">Confirmation</h3>
+                        <div className="flex items-center space-x-2 text-xs text-gray-500">
+                            <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-400 uppercase tracking-tighter font-mono">
+                                Status: Rescheduled
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 uppercase tracking-tighter font-mono">
+                                ID: {Date.now().toString().slice(-8)}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="pt-4 flex flex-col items-center space-y-4">
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="px-8 py-3 rounded-xl bg-white text-black font-semibold hover:bg-gray-200 transition-all shadow-xl shadow-white/5"
+                    >
+                        Return to Dashboard
+                    </button>
+                    <p className="text-[10px] text-gray-600 italic">
+                        Your callback preference has been securely saved to our system.
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     if (isInterviewEnded) {
         return (
@@ -473,7 +601,7 @@ function InterviewContent() {
                 </h1>
                 <p className="text-xl text-gray-400">
                     {interviewConfig
-                        ? `Sarah is ready to discuss the ${interviewConfig.roleName} role with you.`
+                        ? `Priya is ready to discuss the ${interviewConfig.roleName} role with you.`
                         : 'Please wait while we verify your invitation...'}
                 </p>
             </div>
@@ -572,7 +700,7 @@ function InterviewContent() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
                 <div className="p-6 glass-card space-y-2">
                     <h3 className="font-semibold text-white">Persona</h3>
-                    <p className="text-sm text-gray-400">Sarah, {interviewConfig?.companyName || 'HR'} Associate. Polite and efficient.</p>
+                    <p className="text-sm text-gray-400">Priya, {interviewConfig?.companyName || 'HR'} Associate. Polite and efficient.</p>
                 </div>
                 <div className="p-6 glass-card space-y-2">
                     <h3 className="font-semibold text-white">JD Focused</h3>
